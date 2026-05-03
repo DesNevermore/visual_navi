@@ -46,6 +46,15 @@ class VisionClient:
         Analyze image for navigation guidance.
         Returns: {"instruction": "...", "arrived": bool, "needs_recapture": bool}
         """
+        # Check phone angle first (before calling expensive API)
+        angle_warning = self._check_phone_angle(sensors)
+        if angle_warning:
+            return {
+                "instruction": angle_warning,
+                "arrived": False,
+                "needs_recapture": True
+            }
+
         if not self.api_key:
             # Mock response if no API key
             return self._mock_response(destination, last_instruction)
@@ -69,6 +78,32 @@ class VisionClient:
                 "needs_recapture": True
             }
 
+    def _check_phone_angle(self, sensors: Dict[str, Any]) -> Optional[str]:
+        """
+        Check if phone angle is bad and return warning message.
+        Returns None if angle is OK.
+        """
+        orientation = sensors.get("orientation")
+        if not orientation:
+            return None
+
+        beta = orientation.get("beta")
+        gamma = orientation.get("gamma")
+
+        if beta is None:
+            return None
+
+        # Check tilt
+        if beta < -30:
+            return "Raise your phone to chest level and point it forward"
+        elif beta > 30:
+            return "Lower your phone to chest level and point it forward"
+
+        if gamma is not None and abs(gamma) > 45:
+            return "Hold your phone upright, not tilted sideways"
+
+        return None
+
     def _build_prompt(
         self,
         destination: str,
@@ -77,9 +112,44 @@ class VisionClient:
     ) -> str:
         """Build the vision prompt with context"""
         orientation = sensors.get("orientation", {})
-        alpha = orientation.get("alpha", "N/A") if orientation else "N/A"
-        beta = orientation.get("beta", "N/A") if orientation else "N/A"
-        gamma = orientation.get("gamma", "N/A") if orientation else "N/A"
+        motion = sensors.get("motion", {})
+
+        # Extract orientation data
+        alpha = orientation.get("alpha") if orientation else None
+        beta = orientation.get("beta") if orientation else None
+        gamma = orientation.get("gamma") if orientation else None
+
+        # Extract motion data
+        accel = motion.get("accelerationIncludingGravity") if motion else None
+        rotation = motion.get("rotationRate") if motion else None
+
+        # Build sensor description
+        sensor_desc = []
+
+        if alpha is not None and beta is not None and gamma is not None:
+            sensor_desc.append(f"- Orientation: alpha={alpha:.1f}°, beta={beta:.1f}°, gamma={gamma:.1f}°")
+            sensor_desc.append(f"  (alpha: compass heading 0-360°, beta: front-back tilt -180 to 180°, gamma: left-right tilt -90 to 90°)")
+
+            # Interpret phone angle
+            if beta < -30:
+                sensor_desc.append(f"  ⚠️ Phone is tilted DOWN (beta={beta:.1f}°) - user may be looking at the ground")
+            elif beta > 30:
+                sensor_desc.append(f"  ⚠️ Phone is tilted UP (beta={beta:.1f}°) - user may be looking at the ceiling")
+            else:
+                sensor_desc.append(f"  ✓ Phone angle is good (beta={beta:.1f}°)")
+
+            if abs(gamma) > 45:
+                sensor_desc.append(f"  ⚠️ Phone is tilted sideways (gamma={gamma:.1f}°)")
+        else:
+            sensor_desc.append("- Orientation: not available")
+
+        if accel:
+            sensor_desc.append(f"- Acceleration: x={accel.get('x', 0):.2f}, y={accel.get('y', 0):.2f}, z={accel.get('z', 0):.2f} m/s²")
+
+        if rotation:
+            sensor_desc.append(f"- Rotation rate: alpha={rotation.get('alpha', 0):.2f}, beta={rotation.get('beta', 0):.2f}, gamma={rotation.get('gamma', 0):.2f} deg/s")
+
+        sensor_text = "\n".join(sensor_desc)
 
         prompt = f"""You are a navigation assistant for a blind user in a classroom.
 
@@ -87,16 +157,32 @@ Destination: {destination}
 Last instruction: {last_instruction or "None"}
 
 The user is holding a phone. Sensor data:
-- Orientation: alpha={alpha}°, beta={beta}°, gamma={gamma}°
-  (alpha: compass heading 0-360°, beta: front-back tilt -180 to 180°, gamma: left-right tilt -90 to 90°)
+{sensor_text}
 
-Based on the image and sensors:
-1. If the phone is tilted down too much (beta < -30°), say: "Raise your phone to chest level"
-2. If the image is blurry, dark, or unclear, say: "Image unclear, please capture again"
-3. If you can see the destination ({destination}), estimate distance and give direction
-4. If there's an obstacle in the path, say: "Stop. Obstacle ahead."
-5. If the user has reached the destination, say: "You have arrived at the {destination}"
-6. Otherwise, give a short movement instruction (≤ 20 words)
+Based on the image and sensors, provide navigation guidance:
+
+1. **Phone angle check**: If beta < -30° or beta > 30°, or |gamma| > 45°, tell the user to adjust the phone angle first before giving movement instructions.
+   - If tilted down: "Raise your phone to chest level and point it forward"
+   - If tilted up: "Lower your phone to chest level and point it forward"
+   - If tilted sideways: "Hold your phone upright"
+
+2. **Image quality check**: If the image is blurry, dark, too bright, or unclear, say: "Image unclear, please capture again"
+
+3. **Destination detection**: If you can see the destination ({destination}) in the image:
+   - Estimate the distance (in steps or meters)
+   - Provide direction (forward, left, right, slight left, etc.)
+   - Example: "I can see the {destination} ahead. Move forward 5 steps."
+
+4. **Obstacle detection**: If there's an obstacle in the path (chair, desk, person, wall, etc.):
+   - Say: "Stop. [Obstacle type] ahead. Turn [direction] to avoid it."
+
+5. **Arrival check**: If the user is very close to or at the destination:
+   - Say: "You have arrived at the {destination}"
+
+6. **General guidance**: Otherwise, give a short, clear movement instruction:
+   - Use simple directions: "Move forward X steps", "Turn left/right", "Stop"
+   - Keep it under 20 words
+   - Be specific about distance (in steps, not meters)
 
 Return JSON only in this exact format:
 {{
@@ -105,7 +191,7 @@ Return JSON only in this exact format:
   "needs_recapture": false
 }}
 
-Keep instructions short, clear, and actionable. Use simple directions like "Move forward 3 steps", "Turn left 45 degrees", "Stop", etc.
+IMPORTANT: Prioritize safety. If unsure, ask for another capture rather than giving potentially dangerous movement instructions.
 """
         return prompt
 

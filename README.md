@@ -47,8 +47,18 @@ Then open `http://localhost:3000`
 - [x] Day 1: Frontend skeleton with camera + 2 buttons + sensors
 - [x] Day 2: Backend core with /capture and /command endpoints
 - [x] Day 3: API integration (Whisper, Vision LLM)
-- [ ] Day 4: Sensor integration in vision prompts
+- [x] Day 4: Sensor integration in vision prompts
 - [ ] Day 5: Deployment
+
+## Features
+
+- **Camera capture**: Take photos with rear camera
+- **Voice commands**: Speak to set destination and ask for guidance
+- **Sensor data**: Collects device orientation (gyroscope) and motion (accelerometer)
+- **Phone angle detection**: Warns user if phone is tilted incorrectly (saves API costs)
+- **Vision analysis**: Uses multimodal LLM to analyze scene and provide navigation instructions
+- **Speech synthesis**: Reads instructions aloud using browser TTS
+- **Session management**: Maintains context across multiple captures and commands
 
 ## API Keys Setup
 
