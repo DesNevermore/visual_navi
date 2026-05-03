@@ -46,9 +46,26 @@ Then open `http://localhost:3000`
 
 - [x] Day 1: Frontend skeleton with camera + 2 buttons + sensors
 - [x] Day 2: Backend core with /capture and /command endpoints
-- [ ] Day 3: API integration (Whisper, Vision LLM)
+- [x] Day 3: API integration (Whisper, Vision LLM)
 - [ ] Day 4: Sensor integration in vision prompts
 - [ ] Day 5: Deployment
+
+## API Keys Setup
+
+The backend uses external APIs for speech and vision processing. Create a `.env` file in the `backend/` directory:
+
+```bash
+cd backend
+cp .env.example .env
+# Edit .env and add your API keys
+```
+
+Required keys:
+- `OPENAI_API_KEY` - for Whisper speech-to-text (and optional TTS)
+- `GEMINI_API_KEY` - for Gemini vision analysis (or use OpenAI GPT-4o)
+- `VISION_PROVIDER` - set to "gemini" or "openai"
+
+**Without API keys**, the system runs with mock responses for testing the flow.
 
 ## Testing Locally
 

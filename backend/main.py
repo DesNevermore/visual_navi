@@ -10,8 +10,11 @@ import json
 from typing import Optional
 import io
 from PIL import Image
+import os
 
 from session import session_store
+from speech import SpeechClient
+from vision import VisionClient
 
 app = FastAPI(title="Blind Navigation API")
 
@@ -23,6 +26,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Initialize API clients
+# Set OPENAI_API_KEY and/or GEMINI_API_KEY in environment or .env file
+speech_client = SpeechClient()
+vision_client = VisionClient(provider=os.getenv("VISION_PROVIDER", "gemini"))
 
 
 @app.get("/")
@@ -123,18 +131,60 @@ async def command(
 
     print(f"[COMMAND] Session {session_id[:8]}: received audio ({len(audio_data)} bytes), sensors: {sensor_data.keys()}")
 
-    # TODO: Implement transcription and reasoning in Day 3
-    # For now, return mock response
+    # Transcribe audio
+    transcription = speech_client.transcribe(audio_data, audio.filename)
+    print(f"[COMMAND] Transcription: {transcription}")
 
-    # Mock: detect if this is first command (setting destination)
+    if not transcription:
+        return {
+            "status": "error",
+            "spoken_text": "Could not understand audio. Please try again.",
+            "audio_base64": None
+        }
+
+    # Classify intent
+    transcription_lower = transcription.lower()
+
+    # Check if setting destination
     if session.destination is None:
-        mock_transcription = "go to the podium"
-        session.set_destination("podium")
-        spoken_response = f"Destination set to podium. Tap capture to take photos as you walk."
+        # First command should be destination
+        # Extract destination from transcription
+        # Simple keyword matching for demo
+        if "podium" in transcription_lower or "讲台" in transcription_lower:
+            destination = "podium"
+        elif "door" in transcription_lower or "门" in transcription_lower:
+            destination = "door"
+        elif "window" in transcription_lower or "窗" in transcription_lower:
+            destination = "window"
+        else:
+            # Default to whatever they said
+            destination = transcription.strip()
+
+        session.set_destination(destination)
+        spoken_response = f"Destination set to {destination}. Tap capture to take photos as you walk."
+
     else:
-        # Mock navigation instruction
-        spoken_response = "Move forward three steps, then capture again."
-        session.set_last_instruction(spoken_response)
+        # User is asking for guidance
+        # Get latest image
+        latest_image = session.get_latest_image()
+
+        if not latest_image:
+            spoken_response = "Please capture a photo first before asking for guidance."
+        else:
+            # Analyze image with vision LLM
+            result = vision_client.analyze_navigation(
+                image_data=latest_image['data'],
+                destination=session.destination,
+                last_instruction=session.last_instruction,
+                sensors=sensor_data
+            )
+
+            spoken_response = result.get("instruction", "Unable to analyze. Please try again.")
+            session.set_last_instruction(spoken_response)
+
+            # Check if arrived
+            if result.get("arrived", False):
+                print(f"[COMMAND] User arrived at {session.destination}")
 
     return {
         "status": "ok",
