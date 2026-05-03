@@ -1,0 +1,15 @@
+[Unit]
+Description=Blind Navigation Backend
+After=network.target
+
+[Service]
+Type=simple
+User=YOUR_USERNAME
+WorkingDirectory=/path/to/visualNavigator/backend
+Environment="PATH=/path/to/visualNavigator/backend/venv/bin"
+ExecStart=/path/to/visualNavigator/backend/venv/bin/python main.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

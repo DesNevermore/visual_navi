@@ -21,7 +21,7 @@ visualNavigator/
 
 ```bash
 cd backend
-python -m venv venv
+python3 -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 python main.py
@@ -31,16 +31,22 @@ Backend runs on `http://localhost:8000`
 
 ### Frontend
 
-Open `frontend/index.html` in a browser, or serve it:
+Open `frontend/index.html` in Chrome, or serve it:
 
 ```bash
 cd frontend
-python -m http.server 3000
+python3 -m http.server 3000
 ```
 
 Then open `http://localhost:3000`
 
-**Note**: For camera access on mobile, you need HTTPS. See `plans/plan2.md` for deployment options.
+**Note**: For camera access on mobile, you need HTTPS. See [TESTING.md](TESTING.md) and [DEPLOYMENT.md](DEPLOYMENT.md) for options.
+
+## Documentation
+
+- [TESTING.md](TESTING.md) - Complete testing guide for local and mobile testing
+- [DEPLOYMENT.md](DEPLOYMENT.md) - Production deployment guide with HTTPS
+- [plans/plan2.md](plans/plan2.md) - Original development plan
 
 ## Development Status
 
