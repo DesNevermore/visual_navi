@@ -10,28 +10,39 @@ import json
 
 
 class VisionClient:
-    def __init__(self, provider: str = "gemini", api_key: Optional[str] = None):
+    def __init__(
+        self,
+        provider: Optional[str] = None,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+        model: Optional[str] = None
+    ):
         """
         Initialize vision client.
         provider: "gemini" or "openai"
         """
-        self.provider = provider
+        self.provider = provider or os.getenv("VISION_PROVIDER", "gemini")
         self.api_key = api_key
+        self.base_url = base_url
+        self.model = model
 
-        if provider == "gemini":
+        if self.provider == "gemini":
             self.api_key = self.api_key or os.getenv("GEMINI_API_KEY")
+            self.model = self.model or os.getenv("GEMINI_MODEL", "gemini-2.0-flash-exp")
             if self.api_key:
                 import google.generativeai as genai
                 genai.configure(api_key=self.api_key)
-                self.model = genai.GenerativeModel('gemini-2.0-flash-exp')
+                self.model_instance = genai.GenerativeModel(self.model)
             else:
-                self.model = None
+                self.model_instance = None
 
-        elif provider == "openai":
+        elif self.provider == "openai":
             self.api_key = self.api_key or os.getenv("OPENAI_API_KEY")
+            self.base_url = self.base_url or os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+            self.model = self.model or os.getenv("OPENAI_VISION_MODEL", "gpt-4o-mini")
             if self.api_key:
                 from openai import OpenAI
-                self.client = OpenAI(api_key=self.api_key)
+                self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
             else:
                 self.client = None
 
@@ -57,6 +68,7 @@ class VisionClient:
 
         if not self.api_key:
             # Mock response if no API key
+            print("[VISION] No API key, using mock response")
             return self._mock_response(destination, last_instruction)
 
         # Build prompt
@@ -204,7 +216,7 @@ IMPORTANT: Prioritize safety. If unsure, ask for another capture rather than giv
         image = Image.open(io.BytesIO(image_data))
 
         # Generate response
-        response = self.model.generate_content([prompt, image])
+        response = self.model_instance.generate_content([prompt, image])
 
         # Parse JSON response
         text = response.text.strip()
@@ -232,7 +244,7 @@ IMPORTANT: Prioritize safety. If unsure, ask for another capture rather than giv
         image_b64 = base64.b64encode(image_data).decode('utf-8')
 
         response = self.client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=self.model,
             messages=[
                 {
                     "role": "user",

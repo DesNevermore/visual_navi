@@ -76,10 +76,15 @@ cp .env.example .env
 # Edit .env and add your API keys
 ```
 
-Required keys:
-- `OPENAI_API_KEY` - for Whisper speech-to-text (and optional TTS)
-- `GEMINI_API_KEY` - for Gemini vision analysis (or use OpenAI GPT-4o)
-- `VISION_PROVIDER` - set to "gemini" or "openai"
+**Minimal setup (recommended):**
+- `SPEECH_TO_TEXT_API_KEY` - OpenAI API key for Whisper
+- `GEMINI_API_KEY` - Google Gemini API key for vision
+- `VISION_PROVIDER=gemini`
+
+See [API_CONFIG.md](API_CONFIG.md) for detailed configuration options, including:
+- Custom base URLs (国内中转 API)
+- Different model selections
+- Cost optimization tips
 
 **Without API keys**, the system runs with mock responses for testing the flow.
 

@@ -28,9 +28,9 @@ app.add_middleware(
 )
 
 # Initialize API clients
-# Set OPENAI_API_KEY and/or GEMINI_API_KEY in environment or .env file
+# Set environment variables in .env file
 speech_client = SpeechClient()
-vision_client = VisionClient(provider=os.getenv("VISION_PROVIDER", "gemini"))
+vision_client = VisionClient()
 
 
 @app.get("/")

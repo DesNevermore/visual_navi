@@ -8,10 +8,18 @@ from typing import Optional
 
 
 class SpeechClient:
-    def __init__(self, api_key: Optional[str] = None):
-        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+        model: Optional[str] = None
+    ):
+        self.api_key = api_key or os.getenv("SPEECH_TO_TEXT_API_KEY") or os.getenv("OPENAI_API_KEY")
+        self.base_url = base_url or os.getenv("SPEECH_TO_TEXT_BASE_URL", "https://api.openai.com/v1")
+        self.model = model or os.getenv("SPEECH_TO_TEXT_MODEL", "whisper-1")
+
         if self.api_key:
-            self.client = OpenAI(api_key=self.api_key)
+            self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
         else:
             self.client = None
 
@@ -22,6 +30,7 @@ class SpeechClient:
         """
         if not self.client:
             # Mock response if no API key
+            print("[SPEECH] No API key, using mock transcription")
             return "go to the podium"
 
         try:
@@ -31,7 +40,7 @@ class SpeechClient:
             audio_file.name = filename
 
             response = self.client.audio.transcriptions.create(
-                model="whisper-1",
+                model=self.model,
                 file=audio_file,
                 language="en"  # Can be auto-detected or set to "zh" for Chinese
             )
@@ -52,9 +61,12 @@ class SpeechClient:
             return None
 
         try:
+            tts_model = os.getenv("TTS_MODEL", "tts-1")
+            tts_voice = os.getenv("TTS_VOICE", "alloy")
+
             response = self.client.audio.speech.create(
-                model="tts-1",
-                voice="alloy",
+                model=tts_model,
+                voice=tts_voice,
                 input=text
             )
 
