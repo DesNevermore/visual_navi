@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Blind Navigation Demo</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            height: 100vh;
+            overflow: hidden;
+            background: #000;
+            color: #fff;
+        }
+
+        #camera-preview {
+            width: 100%;
+            height: 40vh;
+            object-fit: cover;
+            background: #222;
+        }
+
+        #debug-log {
+            height: 10vh;
+            background: #1a1a1a;
+            padding: 10px;
+            font-size: 12px;
+            font-family: 'Courier New', monospace;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+
+        #debug-log div {
+            line-height: 1.4;
+        }
+
+        #button-container {
+            height: 50vh;
+            display: flex;
+        }
+
+        .action-button {
+            flex: 1;
+            border: none;
+            font-size: 18px;
+            font-weight: bold;
+            cursor: pointer;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            transition: background 0.2s;
+        }
+
+        #capture-button {
+            background: #0066cc;
+            color: white;
+        }
+
+        #capture-button:active {
+            background: #0052a3;
+        }
+
+        #speak-button {
+            background: #00aa00;
+            color: white;
+        }
+
+        #speak-button:active {
+            background: #008800;
+        }
+
+        #speak-button.recording {
+            background: #cc0000;
+        }
+
+        #speak-button.recording:active {
+            background: #aa0000;
+        }
+
+        .button-label {
+            font-size: 24px;
+        }
+
+        .button-hint {
+            font-size: 14px;
+            opacity: 0.8;
+        }
+
+        .button-disabled {
+            opacity: 0.5;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <video id="camera-preview" autoplay playsinline aria-hidden="true"></video>
+
+    <div id="debug-log" aria-hidden="true">
+        <div id="log-line-1">Capture: 0</div>
+        <div id="log-line-2">Last upload: none</div>
+        <div id="log-line-3">State: boot</div>
+    </div>
+
+    <div id="button-container">
+        <button id="capture-button" class="action-button" aria-label="Capture photo button. Tap once to capture image and sensors.">
+            <span class="button-label">CAPTURE PHOTO</span>
+            <span class="button-hint">Tap to capture</span>
+        </button>
+        <button id="speak-button" class="action-button" aria-label="Speak button. Tap once to start recording, tap again to stop and send.">
+            <span class="button-label">SPEAK</span>
+            <span class="button-hint">Tap to record</span>
+        </button>
+    </div>
+
+    <script>
+        // State
+        let state = 'boot';
+        let captureCount = 0;
+        let isRecording = false;
+        let mediaRecorder = null;
+        let audioChunks = [];
+        let videoStream = null;
+
+        // Sensor data
+        let latestSensors = {
+            orientation: null,
+            motion: null,
+            screen: null
+        };
+
+        // DOM elements
+        const video = document.getElementById('camera-preview');
+        const captureButton = document.getElementById('capture-button');
+        const speakButton = document.getElementById('speak-button');
+        const logLine1 = document.getElementById('log-line-1');
+        const logLine2 = document.getElementById('log-line-2');
+        const logLine3 = document.getElementById('log-line-3');
+
+        // Backend URL (change this to your backend)
+        const BACKEND_URL = 'http://localhost:8000';
+
+        // Update debug log
+        function updateLog(line, text) {
+            if (line === 1) logLine1.textContent = text;
+            else if (line === 2) logLine2.textContent = text;
+            else if (line === 3) logLine3.textContent = text;
+        }
+
+        // Speak text using browser TTS
+        function speak(text) {
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.lang = 'en-US';
+            utterance.rate = 1.0;
+            speechSynthesis.cancel(); // Cancel any ongoing speech
+            speechSynthesis.speak(utterance);
+        }
+
+        // Initialize camera
+        async function initCamera() {
+            try {
+                videoStream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'environment' },
+                    audio: false
+                });
+                video.srcObject = videoStream;
+                updateLog(2, 'Camera: initialized');
+                return true;
+            } catch (err) {
+                console.error('Camera error:', err);
+                updateLog(2, 'Camera: failed');
+                speak('Camera access denied');
+                return false;
+            }
+        }
+
+        // Initialize microphone (test only, actual recording happens on button press)
+        async function initMicrophone() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                stream.getTracks().forEach(track => track.stop()); // Just testing permission
+                updateLog(2, 'Microphone: initialized');
+                return true;
+            } catch (err) {
+                console.error('Microphone error:', err);
+                updateLog(2, 'Microphone: failed');
+                speak('Microphone access denied');
+                return false;
+            }
+        }
+
+        // Request device orientation permission (iOS 13+)
+        async function initOrientation() {
+            if (typeof DeviceOrientationEvent !== 'undefined' &&
+                typeof DeviceOrientationEvent.requestPermission === 'function') {
+                try {
+                    const permission = await DeviceOrientationEvent.requestPermission();
+                    if (permission === 'granted') {
+                        setupOrientationListeners();
+                        return true;
+                    } else {
+                        updateLog(2, 'Orientation: denied');
+                        return false;
+                    }
+                } catch (err) {
+                    console.error('Orientation permission error:', err);
+                    return false;
+                }
+            } else {
+                // Android or older iOS - no permission needed
+                setupOrientationListeners();
+                return true;
+            }
+        }
+
+        // Setup sensor listeners
+        function setupOrientationListeners() {
+            window.addEventListener('deviceorientation', (event) => {
+                latestSensors.orientation = {
+                    alpha: event.alpha,
+                    beta: event.beta,
+                    gamma: event.gamma,
+                    absolute: event.absolute
+                };
+            });
+
+            window.addEventListener('devicemotion', (event) => {
+                latestSensors.motion = {
+                    acceleration: event.acceleration ? {
+                        x: event.acceleration.x,
+                        y: event.acceleration.y,
+                        z: event.acceleration.z
+                    } : null,
+                    accelerationIncludingGravity: event.accelerationIncludingGravity ? {
+                        x: event.accelerationIncludingGravity.x,
+                        y: event.accelerationIncludingGravity.y,
+                        z: event.accelerationIncludingGravity.z
+                    } : null,
+                    rotationRate: event.rotationRate ? {
+                        alpha: event.rotationRate.alpha,
+                        beta: event.rotationRate.beta,
+                        gamma: event.rotationRate.gamma
+                    } : null,
+                    interval: event.interval
+                };
+            });
+
+            if (screen.orientation) {
+                latestSensors.screen = {
+                    type: screen.orientation.type,
+                    angle: screen.orientation.angle
+                };
+                screen.orientation.addEventListener('change', () => {
+                    latestSensors.screen = {
+                        type: screen.orientation.type,
+                        angle: screen.orientation.angle
+                    };
+                });
+            }
+        }
+
+        // Capture image from video
+        function captureImage() {
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(video, 0, 0);
+
+            return new Promise((resolve) => {
+                canvas.toBlob((blob) => {
+                    resolve(blob);
+                }, 'image/jpeg', 0.85);
+            });
+        }
+
+        // Upload capture to backend
+        async function uploadCapture(imageBlob) {
+            const formData = new FormData();
+            formData.append('image', imageBlob, 'capture.jpg');
+            formData.append('sensors', JSON.stringify(latestSensors));
+
+            try {
+                const response = await fetch(`${BACKEND_URL}/capture`, {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await response.json();
+                return data;
+            } catch (err) {
+                console.error('Upload error:', err);
+                return { status: 'error', spoken_text: 'Upload failed' };
+            }
+        }
+
+        // Upload command to backend
+        async function uploadCommand(audioBlob) {
+            const formData = new FormData();
+            formData.append('audio', audioBlob, 'command.webm');
+            formData.append('sensors', JSON.stringify(latestSensors));
+
+            try {
+                const response = await fetch(`${BACKEND_URL}/command`, {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await response.json();
+                return data;
+            } catch (err) {
+                console.error('Command upload error:', err);
+                return { status: 'error', spoken_text: 'Command upload failed' };
+            }
+        }
+
+        // Handle capture button
+        captureButton.addEventListener('click', async () => {
+            if (state === 'boot') {
+                // First time - initialize everything
+                updateLog(3, 'State: initializing');
+                captureButton.classList.add('button-disabled');
+                speakButton.classList.add('button-disabled');
+
+                const cameraOk = await initCamera();
+                const micOk = await initMicrophone();
+                const orientationOk = await initOrientation();
+
+                if (!cameraOk) {
+                    speak('Cannot start without camera access');
+                    return;
+                }
+
+                // Wait for video to be ready
+                await new Promise(resolve => {
+                    if (video.readyState >= 2) resolve();
+                    else video.addEventListener('loadeddata', resolve, { once: true });
+                });
+
+                state = 'ready';
+                updateLog(3, 'State: ready');
+                captureButton.classList.remove('button-disabled');
+                speakButton.classList.remove('button-disabled');
+                speak('Ready. Tap capture to take a photo, or tap speak to record your destination.');
+                return;
+            }
+
+            if (state !== 'ready') return;
+
+            // Capture and upload
+            state = 'busy';
+            updateLog(3, 'State: capturing');
+            captureButton.classList.add('button-disabled');
+            speakButton.classList.add('button-disabled');
+
+            const imageBlob = await captureImage();
+            captureCount++;
+            updateLog(1, `Capture: ${captureCount}`);
+            updateLog(2, 'Uploading image + sensors');
+
+            const result = await uploadCapture(imageBlob);
+
+            updateLog(2, `Last upload: image + sensors`);
+            updateLog(3, 'State: ready');
+            state = 'ready';
+            captureButton.classList.remove('button-disabled');
+            speakButton.classList.remove('button-disabled');
+
+            if (result.spoken_text) {
+                speak(result.spoken_text);
+            }
+        });
+
+        // Handle speak button
+        speakButton.addEventListener('click', async () => {
+            if (state === 'boot') {
+                speak('Please tap capture first to initialize');
+                return;
+            }
+
+            if (state === 'busy') return;
+
+            if (!isRecording) {
+                // Start recording
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    audioChunks = [];
+
+                    mediaRecorder = new MediaRecorder(stream);
+                    mediaRecorder.ondataavailable = (event) => {
+                        audioChunks.push(event.data);
+                    };
+
+                    mediaRecorder.start();
+                    isRecording = true;
+                    state = 'recording';
+
+                    speakButton.classList.add('recording');
+                    speakButton.querySelector('.button-label').textContent = 'RECORDING';
+                    speakButton.querySelector('.button-hint').textContent = 'Tap to stop';
+                    captureButton.classList.add('button-disabled');
+                    updateLog(3, 'State: recording');
+
+                    speak('Recording started');
+                } catch (err) {
+                    console.error('Recording error:', err);
+                    speak('Recording failed');
+                }
+            } else {
+                // Stop recording
+                mediaRecorder.stop();
+                mediaRecorder.stream.getTracks().forEach(track => track.stop());
+
+                isRecording = false;
+                state = 'busy';
+
+                speakButton.classList.remove('recording');
+                speakButton.classList.add('button-disabled');
+                speakButton.querySelector('.button-label').textContent = 'SPEAK';
+                speakButton.querySelector('.button-hint').textContent = 'Tap to record';
+                updateLog(3, 'State: processing');
+
+                speak('Recording stopped');
+
+                mediaRecorder.onstop = async () => {
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                    updateLog(2, 'Uploading audio + sensors');
+
+                    const result = await uploadCommand(audioBlob);
+
+                    updateLog(2, `Last upload: audio + sensors`);
+                    updateLog(3, 'State: ready');
+                    state = 'ready';
+                    captureButton.classList.remove('button-disabled');
+                    speakButton.classList.remove('button-disabled');
+
+                    if (result.spoken_text) {
+                        speak(result.spoken_text);
+                    }
+                };
+            }
+        });
+
+        // Initialize on load
+        updateLog(3, 'State: boot');
+        updateLog(2, 'Tap CAPTURE to start');
+    </script>
+</body>
+</html>
