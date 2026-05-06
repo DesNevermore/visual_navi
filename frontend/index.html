@@ -127,8 +127,13 @@
         let state = 'boot';
         let captureCount = 0;
         let isRecording = false;
-        let mediaRecorder = null;
-        let audioChunks = [];
+        let recordingStream = null;
+        let audioContext = null;
+        let recordingSource = null;
+        let recordingProcessor = null;
+        let recordingSilence = null;
+        let recordingBuffers = [];
+        let recordingSampleRate = 44100;
         let videoStream = null;
 
         // Sensor data
@@ -146,8 +151,17 @@
         const logLine2 = document.getElementById('log-line-2');
         const logLine3 = document.getElementById('log-line-3');
 
-        // Backend URL (change this to your backend)
-        const BACKEND_URL = 'http://localhost:8000';
+        // Backend URL for local development and oc.rustapp.uk tunnels.
+        const FETCH_TIMEOUT_MS = 45000;
+        const BROWSER_TTS_VOLUME = 0.55;
+        const BUTTON_TONE_VOLUME = 0.12;
+        const BACKEND_PORT_BY_FRONTEND_PORT = {
+            '1200': '1100',
+            '1201': '1101'
+        };
+        const backendPort = BACKEND_PORT_BY_FRONTEND_PORT[window.location.port] ||
+            (['localhost', '127.0.0.1'].includes(window.location.hostname) ? '1100' : '1101');
+        const BACKEND_URL = `${window.location.protocol}//${window.location.hostname}:${backendPort}`;
 
         // Update debug log
         function updateLog(line, text) {
@@ -156,13 +170,152 @@
             else if (line === 3) logLine3.textContent = text;
         }
 
+        function playClickTone() {
+            const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+            if (!AudioContextCtor) return;
+
+            const context = new AudioContextCtor();
+            const oscillator = context.createOscillator();
+            const gain = context.createGain();
+            const now = context.currentTime;
+
+            oscillator.type = 'sine';
+            oscillator.frequency.setValueAtTime(880, now);
+            gain.gain.setValueAtTime(0.001, now);
+            gain.gain.linearRampToValueAtTime(BUTTON_TONE_VOLUME, now + 0.01);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+
+            oscillator.connect(gain);
+            gain.connect(context.destination);
+            oscillator.start(now);
+            oscillator.stop(now + 0.09);
+            oscillator.onended = () => context.close();
+        }
+
+        function resetToReady() {
+            state = 'ready';
+            isRecording = false;
+            updateLog(3, 'State: ready');
+            captureButton.classList.remove('button-disabled');
+            speakButton.classList.remove('button-disabled', 'recording');
+            speakButton.querySelector('.button-label').textContent = 'SPEAK';
+            speakButton.querySelector('.button-hint').textContent = 'Tap to record';
+        }
+
+        async function fetchWithTimeout(url, options) {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+
+            try {
+                return await fetch(url, {
+                    ...options,
+                    signal: controller.signal
+                });
+            } finally {
+                clearTimeout(timeoutId);
+            }
+        }
+
         // Speak text using browser TTS
-        function speak(text) {
+        function speak(text, audioBase64 = null, audioContentType = 'audio/mpeg') {
+            if (audioBase64) {
+                const audio = new Audio(`data:${audioContentType || 'audio/mpeg'};base64,${audioBase64}`);
+                speechSynthesis.cancel();
+                audio.play().catch((err) => {
+                    console.error('Audio playback error:', err);
+                    speak(text);
+                });
+                return;
+            }
+
             const utterance = new SpeechSynthesisUtterance(text);
             utterance.lang = 'en-US';
             utterance.rate = 1.0;
+            utterance.volume = BROWSER_TTS_VOLUME;
             speechSynthesis.cancel(); // Cancel any ongoing speech
             speechSynthesis.speak(utterance);
+        }
+
+        async function startAudioRecording() {
+            recordingStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            recordingSampleRate = audioContext.sampleRate;
+            recordingBuffers = [];
+
+            recordingSource = audioContext.createMediaStreamSource(recordingStream);
+            recordingProcessor = audioContext.createScriptProcessor(4096, 1, 1);
+            recordingSilence = audioContext.createGain();
+            recordingSilence.gain.value = 0;
+
+            recordingProcessor.onaudioprocess = (event) => {
+                recordingBuffers.push(new Float32Array(event.inputBuffer.getChannelData(0)));
+            };
+
+            recordingSource.connect(recordingProcessor);
+            recordingProcessor.connect(recordingSilence);
+            recordingSilence.connect(audioContext.destination);
+        }
+
+        async function stopAudioRecording() {
+            if (recordingProcessor) {
+                recordingProcessor.disconnect();
+                recordingProcessor.onaudioprocess = null;
+            }
+            if (recordingSource) recordingSource.disconnect();
+            if (recordingSilence) recordingSilence.disconnect();
+            if (recordingStream) {
+                recordingStream.getTracks().forEach(track => track.stop());
+            }
+            if (audioContext) {
+                await audioContext.close();
+            }
+
+            recordingProcessor = null;
+            recordingSource = null;
+            recordingSilence = null;
+            recordingStream = null;
+            audioContext = null;
+
+            const wavBuffer = encodeWav(recordingBuffers, recordingSampleRate);
+            recordingBuffers = [];
+            return new Blob([wavBuffer], { type: 'audio/wav' });
+        }
+
+        function encodeWav(buffers, sampleRate) {
+            const sampleCount = buffers.reduce((total, buffer) => total + buffer.length, 0);
+            const wavBuffer = new ArrayBuffer(44 + sampleCount * 2);
+            const view = new DataView(wavBuffer);
+
+            writeAscii(view, 0, 'RIFF');
+            view.setUint32(4, 36 + sampleCount * 2, true);
+            writeAscii(view, 8, 'WAVE');
+            writeAscii(view, 12, 'fmt ');
+            view.setUint32(16, 16, true);
+            view.setUint16(20, 1, true);
+            view.setUint16(22, 1, true);
+            view.setUint32(24, sampleRate, true);
+            view.setUint32(28, sampleRate * 2, true);
+            view.setUint16(32, 2, true);
+            view.setUint16(34, 16, true);
+            writeAscii(view, 36, 'data');
+            view.setUint32(40, sampleCount * 2, true);
+
+            let offset = 44;
+            for (const buffer of buffers) {
+                for (let i = 0; i < buffer.length; i++) {
+                    const sample = Math.max(-1, Math.min(1, buffer[i]));
+                    view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+                    offset += 2;
+                }
+            }
+
+            return wavBuffer;
+        }
+
+        function writeAscii(view, offset, text) {
+            for (let i = 0; i < text.length; i++) {
+                view.setUint8(offset + i, text.charCodeAt(i));
+            }
         }
 
         // Initialize camera
@@ -290,10 +443,12 @@
             formData.append('sensors', JSON.stringify(latestSensors));
 
             try {
-                const response = await fetch(`${BACKEND_URL}/capture`, {
+                const response = await fetchWithTimeout(`${BACKEND_URL}/capture`, {
                     method: 'POST',
+                    credentials: 'include',
                     body: formData
                 });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const data = await response.json();
                 return data;
             } catch (err) {
@@ -305,14 +460,16 @@
         // Upload command to backend
         async function uploadCommand(audioBlob) {
             const formData = new FormData();
-            formData.append('audio', audioBlob, 'command.webm');
+            formData.append('audio', audioBlob, 'command.wav');
             formData.append('sensors', JSON.stringify(latestSensors));
 
             try {
-                const response = await fetch(`${BACKEND_URL}/command`, {
+                const response = await fetchWithTimeout(`${BACKEND_URL}/command`, {
                     method: 'POST',
+                    credentials: 'include',
                     body: formData
                 });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const data = await response.json();
                 return data;
             } catch (err) {
@@ -323,6 +480,8 @@
 
         // Handle capture button
         captureButton.addEventListener('click', async () => {
+            playClickTone();
+
             if (state === 'boot') {
                 // First time - initialize everything
                 updateLog(3, 'State: initializing');
@@ -368,18 +527,17 @@
             const result = await uploadCapture(imageBlob);
 
             updateLog(2, `Last upload: image + sensors`);
-            updateLog(3, 'State: ready');
-            state = 'ready';
-            captureButton.classList.remove('button-disabled');
-            speakButton.classList.remove('button-disabled');
+            resetToReady();
 
             if (result.spoken_text) {
-                speak(result.spoken_text);
+                speak(result.spoken_text, result.audio_base64, result.audio_content_type);
             }
         });
 
         // Handle speak button
         speakButton.addEventListener('click', async () => {
+            playClickTone();
+
             if (state === 'boot') {
                 speak('Please tap capture first to initialize');
                 return;
@@ -390,15 +548,7 @@
             if (!isRecording) {
                 // Start recording
                 try {
-                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                    audioChunks = [];
-
-                    mediaRecorder = new MediaRecorder(stream);
-                    mediaRecorder.ondataavailable = (event) => {
-                        audioChunks.push(event.data);
-                    };
-
-                    mediaRecorder.start();
+                    await startAudioRecording();
                     isRecording = true;
                     state = 'recording';
 
@@ -407,17 +557,12 @@
                     speakButton.querySelector('.button-hint').textContent = 'Tap to stop';
                     captureButton.classList.add('button-disabled');
                     updateLog(3, 'State: recording');
-
-                    speak('Recording started');
                 } catch (err) {
                     console.error('Recording error:', err);
                     speak('Recording failed');
                 }
             } else {
                 // Stop recording
-                mediaRecorder.stop();
-                mediaRecorder.stream.getTracks().forEach(track => track.stop());
-
                 isRecording = false;
                 state = 'busy';
 
@@ -427,24 +572,24 @@
                 speakButton.querySelector('.button-hint').textContent = 'Tap to record';
                 updateLog(3, 'State: processing');
 
-                speak('Recording stopped');
-
-                mediaRecorder.onstop = async () => {
-                    const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                try {
+                    const audioBlob = await stopAudioRecording();
                     updateLog(2, 'Uploading audio + sensors');
 
                     const result = await uploadCommand(audioBlob);
 
                     updateLog(2, `Last upload: audio + sensors`);
-                    updateLog(3, 'State: ready');
-                    state = 'ready';
-                    captureButton.classList.remove('button-disabled');
-                    speakButton.classList.remove('button-disabled');
 
                     if (result.spoken_text) {
-                        speak(result.spoken_text);
+                        speak(result.spoken_text, result.audio_base64, result.audio_content_type);
                     }
-                };
+                } catch (err) {
+                    console.error('Command processing error:', err);
+                    updateLog(2, 'Command failed');
+                    speak('Command failed. Please try again.');
+                } finally {
+                    resetToReady();
+                }
             }
         });
 

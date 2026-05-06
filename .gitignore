@@ -12,7 +12,11 @@ build/
 .env
 .venv
 *.log
+*.pid
 .DS_Store
 nohup.out
+.runtime/
+logs/
 plans/
 tasks/
+**/.env

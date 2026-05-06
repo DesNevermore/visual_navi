@@ -21,24 +21,33 @@ visualNavigator/
 
 ```bash
 cd backend
-python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-pip install -r requirements.txt
-python main.py
+uv sync
+uv run uvicorn main:app --host 127.0.0.1 --port 1100
 ```
 
-Backend runs on `http://localhost:8000`
+Backend runs on `http://localhost:1100`
 
 ### Frontend
 
-Open `frontend/index.html` in Chrome, or serve it:
+Serve it:
 
 ```bash
 cd frontend
-python3 -m http.server 3000
+python3 -m http.server 1200 --bind 127.0.0.1
 ```
 
-Then open `http://localhost:3000`
+Then open `http://localhost:1200`
+
+### Tunneled Start/Stop
+
+Use the repo scripts to start both services with `nohup`:
+
+```bash
+./scripts/start.sh
+./scripts/stop.sh
+```
+
+With the configured tunnels, open `https://oc.rustapp.uk:1201`. The frontend will call the backend through `https://oc.rustapp.uk:1101`.
 
 **Note**: For camera access on mobile, you need HTTPS. See [TESTING.md](TESTING.md) and [DEPLOYMENT.md](DEPLOYMENT.md) for options.
 

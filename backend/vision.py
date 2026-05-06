@@ -25,6 +25,7 @@ class VisionClient:
         self.api_key = api_key
         self.base_url = base_url
         self.model = model
+        self.api_timeout = float(os.getenv("API_TIMEOUT_SECONDS", "30"))
 
         if self.provider == "gemini":
             self.api_key = self.api_key or os.getenv("GEMINI_API_KEY")
@@ -42,7 +43,11 @@ class VisionClient:
             self.model = self.model or os.getenv("OPENAI_VISION_MODEL", "gpt-4o-mini")
             if self.api_key:
                 from openai import OpenAI
-                self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+                self.client = OpenAI(
+                    api_key=self.api_key,
+                    base_url=self.base_url,
+                    timeout=self.api_timeout,
+                )
             else:
                 self.client = None
 
